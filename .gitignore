@@ -1,0 +1,10 @@
+.env
+downloads/
+output/
+debug/
+__pycache__/
+*.pyc
+.claude/
+*.xlsm
+*.xlsx
+*.zip
