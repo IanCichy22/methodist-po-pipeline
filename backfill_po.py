@@ -5,13 +5,13 @@ re-running just the tracker backfill after editing the JSON files or the
 tracker itself, without re-pulling PO emails via main.py.
 """
 
-import json
-import os
-from pathlib import Path
+import json  # Load Fulfilled/Unfulfilled JSON records from disk
+import os  # Read environment variables (TRACKER_PATH)
+from pathlib import Path  # Cross-platform file path handling
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # Load .env file with Gmail credentials and tracker path
 
-from po_pipeline import PurchaseOrderPipeline
+from po_pipeline import PurchaseOrderPipeline  # Main pipeline class for backfilling
 
 load_dotenv()
 
