@@ -16,21 +16,21 @@ The "Read the message" link is extracted directly from the raw email HTML
 rather than clicked through Gmail's UI.
 """
 
-import csv
-import email
-import imaplib
-import json
-import re
-import time
-from pathlib import Path
-from urllib.parse import urlparse
+import csv  # Write Fulfilled/Unfulfilled POs.csv for VBA backfiller
+import email  # Parse email messages from IMAP
+import imaplib  # Connect to Gmail via IMAP
+import json  # Load/save Fulfilled/Unfulfilled JSON records
+import re  # Regex for email link extraction and OTP parsing
+import time  # Sleep during polling loops
+from pathlib import Path  # Cross-platform file path handling
+from urllib.parse import urlparse  # Parse OME portal URLs
 
-import openpyxl
-import pandas as pd
-from bs4 import BeautifulSoup
-from openpyxl.comments import Comment
-from openpyxl.styles import PatternFill
-from playwright.sync_api import sync_playwright
+import openpyxl  # Read/write Excel workbooks
+import pandas as pd  # Parse spreadsheet columns into records
+from bs4 import BeautifulSoup  # Parse HTML email bodies
+from openpyxl.comments import Comment  # Add cell comments (duplicate/discrepancy notes)
+from openpyxl.styles import PatternFill  # Color rows (yellow duplicates, red unfulfilled)
+from playwright.sync_api import sync_playwright  # Browser automation for OME portal
 
 READ_LINK_PHRASES = (
     "view the message",
