@@ -16,6 +16,7 @@ The "Read the message" link is extracted directly from the raw email HTML
 rather than clicked through Gmail's UI.
 """
 
+import csv
 import email
 import imaplib
 import json
@@ -486,7 +487,27 @@ class PurchaseOrderPipeline:
 
         print(f"Fulfilled POs: {len(fulfilled)} records -> {self.fulfilled_json_path}")
         print(f"Unfulfilled POs: {len(unfulfilled)} records -> {self.unfulfilled_json_path}")
+
+        self._write_csv(fulfilled, self.fulfilled_json_path.with_suffix(".csv"))
+        self._write_csv(unfulfilled, self.unfulfilled_json_path.with_suffix(".csv"))
         return fulfilled, unfulfilled
+
+    def _write_csv(self, records: dict[str, str], path: Path) -> None:
+        """Writes a two-column SeqNo,PO CSV (for the VBA backfill) from a records dict."""
+        rows = 0
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["SeqNo", "PO"])
+            for key, po in records.items():
+                parts = key.split("|")
+                if len(parts) <= self.SEQNO_KEY_INDEX:
+                    continue
+                seqno = parts[self.SEQNO_KEY_INDEX]
+                if not seqno or seqno == "nan":
+                    continue
+                writer.writerow([seqno, po])
+                rows += 1
+        print(f"CSV: {rows} rows -> {path}")
 
     # ===================================================================
     # Stage 3: tracker backfill
