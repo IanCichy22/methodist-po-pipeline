@@ -3,33 +3,34 @@
 '
 ' Usage: Call BackfillTracker with paths to CSVs and tracker file
 
+Option Explicit
+
 Function LoadCSVMap(filePath As String) As Object
     ' Reads a CSV file and returns a Dictionary mapping SeqNo to PO value
     ' filePath: path to CSV file (e.g., "C:\path\Fulfilled POs.csv")
 
     Dim dict As Object
-    Set dict = CreateObject("Scripting.Dictionary")
-
     Dim fso As Object
+    Dim file As Object
+    Dim headerLine As String
+    Dim line As String
+    Dim seqno As String
+    Dim poValue As String
+
+    Set dict = CreateObject("Scripting.Dictionary")
     Set fso = CreateObject("Scripting.FileSystemObject")
 
     If Not fso.FileExists(filePath) Then
         Err.Raise vbObjectError + 1, "LoadCSVMap", "File not found: " & filePath
     End If
 
-    Dim file As Object
     Set file = fso.OpenTextFile(filePath, 1) ' 1 = ForReading
 
-    Dim headerLine As String
     headerLine = file.ReadLine() ' Skip header row
 
-    Dim line As String
     While Not file.AtEndOfStream
         line = file.ReadLine()
         If Len(line) > 0 Then
-            Dim seqno As String
-            Dim poValue As String
-
             ' Parse CSV line (handle quoted fields)
             Call ParseCSVLine(line, seqno, poValue)
 
@@ -57,14 +58,19 @@ Function LoadCSVMap(filePath As String) As Object
 End Function
 
 Sub ParseCSVLine(csvLine As String, ByRef field1 As String, ByRef field2 As String)
-    ' Parses a CSV line into two fields, handling quoted values
+    ' Two-column CSV parser, handling quoted values.
+    ' field1 = text before the FIRST comma that is not inside quotes
+    ' field2 = everything after it (so commas inside field2 are safe)
+    ' A doubled quote ("") inside a quoted field = one literal quote mark.
     ' Handles: SeqNo123,123456
-    '          SeqNo124,"Mt total is $7,746"
+    '          SeqNo124,"Mt total is $7,746"    -> field2 = Mt total is $7,746
+    '          SeqNo125,"He said ""hi"" loudly" -> field2 = He said "hi" loudly
 
     Dim inQuotes As Boolean
     Dim currentField As String
-    Dim fieldCount As Integer
+    Dim fieldCount As Long
     Dim i As Long
+    Dim char As String
 
     inQuotes = False
     currentField = ""
@@ -73,20 +79,21 @@ Sub ParseCSVLine(csvLine As String, ByRef field1 As String, ByRef field2 As Stri
     field2 = ""
 
     For i = 1 To Len(csvLine)
-        Dim char As String
         char = Mid(csvLine, i, 1)
 
         If char = """" Then
-            inQuotes = Not inQuotes
-        ElseIf char = "," And Not inQuotes Then
-            ' End of field
-            If fieldCount = 1 Then
-                field1 = Trim(currentField)
+            If inQuotes And Mid(csvLine, i + 1, 1) = """" Then
+                ' Doubled quote = one literal quote mark; skip the pair's 2nd quote
+                currentField = currentField & """"
+                i = i + 1
             Else
-                field2 = Trim(currentField)
+                inQuotes = Not inQuotes
             End If
+        ElseIf char = "," And Not inQuotes And fieldCount = 1 Then
+            ' End of field1; everything from here on belongs to field2
+            field1 = Trim(currentField)
             currentField = ""
-            fieldCount = fieldCount + 1
+            fieldCount = 2
         Else
             currentField = currentField & char
         End If
@@ -104,18 +111,19 @@ Function NormalizePO(poValue As Variant) As String
     ' Converts PO to canonical form: "123456"
     ' Handles: "123456", 123456, 123456.0 all normalize to same value
 
+    Dim strValue As String
+    Dim numValue As Double
+
     If IsEmpty(poValue) Or poValue = "" Then
         NormalizePO = ""
         Exit Function
     End If
 
-    Dim strValue As String
     strValue = CStr(poValue)
     strValue = Trim(strValue)
 
     ' Try to convert to number and back to normalize
     On Error Resume Next
-    Dim numValue As Double
     numValue = CDbl(strValue)
     If Err.Number = 0 And numValue = Int(numValue) Then
         NormalizePO = CStr(Int(numValue))
@@ -125,37 +133,35 @@ Function NormalizePO(poValue As Variant) As String
     On Error GoTo 0
 End Function
 
-Sub FillRowColor(ws As Worksheet, row As Long, colorHex As String)
-    ' Fills entire row with a color
-    ' colorHex: RGB color like "FFFF00" (yellow) or "FF0000" (red)
+Sub FillRowColor(ws As Worksheet, row As Long, fillColor As Long)
+    ' Fills entire row with a color.
+    ' Pass the color in with VBA's RGB() function at the call site:
+    '   FillRowColor ws, row, RGB(255, 255, 0)   ' yellow
+    '   FillRowColor ws, row, RGB(255, 0, 0)     ' red
 
     Dim col As Long
-    Dim maxCol As Long
-    maxCol = ws.UsedRange.Columns.Count
 
-    For col = 1 To maxCol
-        Dim r As Long, g As Long, b As Long
-        r = CLngFromHex(Left(colorHex, 2))
-        g = CLngFromHex(Mid(colorHex, 3, 2))
-        b = CLngFromHex(Right(colorHex, 2))
-
-        ws.Cells(row, col).Interior.Color = RGB(r, g, b)
+    For col = 1 To ws.UsedRange.Columns.Count
+        ws.Cells(row, col).Interior.Color = fillColor
     Next col
 End Sub
 
-Function CLngFromHex(hexStr As String) As Long
-    ' Converts hex string like "FF" to decimal 255
-    CLngFromHex = Val("&H" & hexStr)
-End Function
-
 Sub AddCellComment(cell As Range, commentText As String)
-    ' Adds or updates a comment on a cell
+    ' Adds or updates a comment on a cell.
+    ' Excel stamps every comment with whatever Application.UserName is set to
+    ' and won't let you pass an author directly -- so borrow the setting,
+    ' stamp the comment as "PO Pipeline", then put the user's name back.
+
+    Dim oldName As String
 
     On Error Resume Next
     cell.ClearComments ' Remove existing comment if any
     On Error GoTo 0
 
+    oldName = Application.UserName
+    Application.UserName = "PO Pipeline"
     cell.AddComment commentText
+    Application.UserName = oldName
 End Sub
 
 Function BackfillTracker(trackerFilePath As String, sheetName As String, seqnoCol As Long, poCol As Long, _
@@ -176,52 +182,61 @@ Function BackfillTracker(trackerFilePath As String, sheetName As String, seqnoCo
     '                   "C:\output\Fulfilled POs.csv", "C:\output\Unfulfilled POs.csv"
     '
 
+    Dim fulfilledMap As Object
+    Dim unfulfilledMap As Object
+    Dim wb As Workbook
+    Dim openedHere As Boolean
+    Dim ws As Worksheet
+    Dim existingPOs As Object
+    Dim row As Long
+    Dim maxRow As Long
+    Dim seqnoCell As Range
+    Dim poCell As Range
+    Dim seqno As String
+    Dim normPO As String
+    Dim filledCount As Long
+    Dim flaggedCount As Long
+    Dim duplicateCount As Long
+    Dim poValue As Variant
+    Dim normValue As String
+    Dim unfulfilledNote As String
+
     On Error GoTo ErrorHandler
 
     ' Load CSV data into dictionaries
     Debug.Print "[Backfill] Loading fulfilled data from " & fulfilledCSVPath
-    Dim fulfilledMap As Object
     Set fulfilledMap = LoadCSVMap(fulfilledCSVPath)
     Debug.Print "[Backfill] Loaded " & fulfilledMap.Count & " fulfilled records"
 
     Debug.Print "[Backfill] Loading unfulfilled data from " & unfulfilledCSVPath
-    Dim unfulfilledMap As Object
     Set unfulfilledMap = LoadCSVMap(unfulfilledCSVPath)
     Debug.Print "[Backfill] Loaded " & unfulfilledMap.Count & " unfulfilled records"
 
     ' Empty path = use the workbook this macro lives in (already open, so never closed here)
-    Dim wb As Workbook
-    Dim openedHere As Boolean
     If trackerFilePath = "" Then
         Set wb = ThisWorkbook
     Else
         Set wb = Workbooks.Open(trackerFilePath)
         openedHere = True
     End If
-    Dim ws As Worksheet
     Set ws = wb.Sheets(sheetName)
 
     ' Track existing POs to detect duplicates
-    Dim existingPOs As Object
     Set existingPOs = CreateObject("Scripting.Dictionary")
 
+    ' Last data row: start at the very bottom of the SeqNo column and jump up
+    ' (like Ctrl+Up) -- safer than UsedRange.Rows.Count, which only equals the
+    ' last row if the sheet's used area starts at row 1
+    maxRow = ws.Cells(ws.Rows.Count, seqnoCol).End(xlUp).Row
+
     ' Baseline scan: collect POs already on IF- rows before this run
-    Dim row As Long
-    Dim maxRow As Long
-    maxRow = ws.UsedRange.Rows.Count
-
     For row = 2 To maxRow
-        Dim seqnoCell As Range
-        Dim poCell As Range
-
         Set seqnoCell = ws.Cells(row, seqnoCol)
         Set poCell = ws.Cells(row, poCol)
 
-        Dim seqno As String
         seqno = CStr(seqnoCell.Value)
 
         If seqno <> "" And Left(seqno, 2) = "IF" Then
-            Dim normPO As String
             normPO = NormalizePO(poCell.Value)
             If normPO <> "" Then
                 If Not existingPOs.Exists(normPO) Then
@@ -232,9 +247,6 @@ Function BackfillTracker(trackerFilePath As String, sheetName As String, seqnoCo
     Next row
 
     ' Counters for summary
-    Dim filledCount As Long
-    Dim flaggedCount As Long
-    Dim duplicateCount As Long
     filledCount = 0
     flaggedCount = 0
     duplicateCount = 0
@@ -252,18 +264,16 @@ Function BackfillTracker(trackerFilePath As String, sheetName As String, seqnoCo
 
                 ' Check if SeqNo is in fulfilled map
                 If fulfilledMap.Exists(seqno) Then
-                    Dim poValue As Variant
                     poValue = fulfilledMap(seqno)
                     poCell.Value = poValue
 
                     ' Check for duplicate
-                    Dim normValue As String
                     normValue = NormalizePO(poValue)
 
                     If existingPOs.Exists(normValue) And existingPOs(normValue) <> row Then
                         ' This PO is already used elsewhere -- flag as duplicate
                         AddCellComment poCell, "Duplicate PO#"
-                        FillRowColor ws, row, "FFFF00" ' Yellow
+                        FillRowColor ws, row, RGB(255, 255, 0) ' Yellow
                         Debug.Print "[Backfill] Row " & row & " (" & seqno & "): Duplicate PO " & poValue & " (also on row " & existingPOs(normValue) & ")"
                         duplicateCount = duplicateCount + 1
                     Else
@@ -275,12 +285,11 @@ Function BackfillTracker(trackerFilePath As String, sheetName As String, seqnoCo
 
                 ' Check if SeqNo is in unfulfilled map
                 ElseIf unfulfilledMap.Exists(seqno) Then
-                    Dim unfulfilledNote As String
                     unfulfilledNote = unfulfilledMap(seqno)
 
                     poCell.Value = "SCRUBSHEET DISCREPANCY"
                     AddCellComment poCell, unfulfilledNote
-                    FillRowColor ws, row, "FF0000" ' Red
+                    FillRowColor ws, row, RGB(255, 0, 0) ' Red
 
                     Debug.Print "[Backfill] Row " & row & " (" & seqno & "): Unfulfilled (note: " & unfulfilledNote & ")"
                     flaggedCount = flaggedCount + 1
@@ -306,6 +315,8 @@ Function BackfillTracker(trackerFilePath As String, sheetName As String, seqnoCo
 
     Exit Function
 ErrorHandler:
+    ' Don't leave a file we opened sitting locked inside a hidden Excel
+    If openedHere Then wb.Close SaveChanges:=False
     BackfillTracker = "ERROR: " & Err.Description
     Debug.Print "[Backfill] ERROR: " & Err.Description
 End Function
